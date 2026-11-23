@@ -6,6 +6,7 @@ import argparse
 import sys
 
 from . import __version__
+from .aws_cur import read_aws_cur, read_aws_cur_file
 from .detect import GROUP_FIELDS, Settings, scan
 from .loader import CostFileError, read_costs, read_costs_file
 from .report import to_json, to_markdown
@@ -22,6 +23,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("scan", help="scan a daily cost CSV for anomalies")
     p.add_argument("--export", required=True, metavar="FILE",
                    help="daily cost CSV (date,service,account,tag,cost); '-' reads stdin")
+    p.add_argument("--source", choices=("generic", "aws-cur"), default="generic",
+                   help="input layout: the generic daily CSV or an AWS Cost and Usage "
+                        "Report CSV (default: generic)")
+    p.add_argument("--tag-key", metavar="KEY",
+                   help="with --source aws-cur: use the resourceTags/user:KEY column as the tag")
     p.add_argument("--days", type=int, default=30,
                    help="check the most recent N days in the file (default: 30)")
     p.add_argument("--baseline-days", type=int, default=14,
@@ -61,7 +67,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         settings.validate()
-        rows = read_costs(sys.stdin) if args.export == "-" else read_costs_file(args.export)
+        if args.tag_key and args.source != "aws-cur":
+            raise ValueError("--tag-key only applies with --source aws-cur")
+        if args.source == "aws-cur":
+            rows = (read_aws_cur(sys.stdin, args.tag_key) if args.export == "-"
+                    else read_aws_cur_file(args.export, args.tag_key))
+        else:
+            rows = read_costs(sys.stdin) if args.export == "-" else read_costs_file(args.export)
         if not rows:
             raise CostFileError("cost file has a header but no data rows")
         result = scan(rows, settings)

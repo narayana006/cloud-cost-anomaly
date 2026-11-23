@@ -2,7 +2,7 @@
 
 Detect unusual daily cloud spend from a cost CSV and explain which service, account or tag caused it.
 
-**Status:** early but working. Today it reads a daily cost CSV, flags anomalous days per service and account (or any combination of service, account and tag) against a robust trailing baseline, and names the rows that drove each one, as Markdown or JSON. It does not yet read AWS, Google Cloud or Azure billing exports directly, and it does not send alerts. See the [checklist](#features).
+**Status:** early but working. Today it reads a daily cost CSV, flags anomalous days per service and account (or any combination of service, account and tag) against a robust trailing baseline, and names the rows that drove each one, as Markdown or JSON. It also reads AWS Cost and Usage Report (CUR) CSV files directly. It does not yet read Google Cloud or Azure billing exports, and it does not send alerts. See the [checklist](#features).
 
 It only reads a file you give it. It never talks to a cloud account.
 
@@ -99,6 +99,30 @@ Several rows may share the same date, service, account and tag; they are summed.
 
 Pass `--export -` to read the CSV from standard input.
 
+## AWS Cost and Usage Report input
+
+Use `--source aws-cur` to scan a CUR CSV without converting it first. Both the legacy column names (`lineItem/UsageStartDate`) and the CUR 2.0 / Data Exports names (`line_item_usage_start_date`) are accepted.
+
+Columns used: usage start date (date part only), product code (service), usage account id (account) and unblended cost. Tax line items are skipped; credits and refunds are kept as negative costs. To explain anomalies by a cost allocation tag, pass its key with `--tag-key`, which reads the `resourceTags/user:<key>` column and shows it as `<key>=<value>`. Without `--tag-key`, every row is `(untagged)`.
+
+```bash
+cloud-cost-anomaly scan --source aws-cur --tag-key team --export examples/cur_sample.csv
+```
+
+```markdown
+**1 anomaly found**, largest change first.
+
+| Date | Service | Account | Cost | Baseline | Change | Score |
+|---|---|---|---:|---:|---:|---:|
+| 2025-03-21 | AmazonEC2 | 111111111111 | 600.00 | 101.00 | +499.00 (+494%) | 98.8 |
+
+Top contributors:
+
+- `team=data`: 500.00 vs usual 0.00 (+500.00, 100% of the change)
+```
+
+Only CSV is read (plain or via `--export -`); Parquet CUR files, `s3://` paths and the CUR 2.0 JSON `resource_tags` column are not supported. Hourly line items are summed into days.
+
 ## How detection works
 
 1. Rows are summed into one daily series per group. The default group is service + account.
@@ -118,6 +142,8 @@ cloud-cost-anomaly scan --export FILE [options]
 | Option | Default | Meaning |
 |---|---|---|
 | `--export FILE` | required | Cost CSV, or `-` for stdin |
+| `--source {generic,aws-cur}` | generic | Input layout |
+| `--tag-key KEY` | none | With `aws-cur`: tag taken from `resourceTags/user:KEY` |
 | `--days N` | 30 | Check the most recent N days in the file (counted back from the last date in the file, not from today) |
 | `--baseline-days N` | 14 | Trailing window each day is compared with |
 | `--min-history N` | 7 | Days of history needed before a day is judged |
@@ -212,7 +238,7 @@ cloud-cost-anomaly scan --export examples/daily_costs.csv --days 5 --top 1 --for
 
 ## Features
 
-- [ ] Reads AWS, Google Cloud and Azure billing exports (today: a generic daily cost CSV only)
+- [ ] Reads AWS, Google Cloud and Azure billing exports (today: AWS CUR CSV and a generic daily cost CSV; Google Cloud and Azure still to do)
 - [x] Daily anomaly detection per service, account and tag
 - [x] Explains each anomaly by its largest contributing line items
 - [ ] Slack or webhook alerts
@@ -220,7 +246,7 @@ cloud-cost-anomaly scan --export examples/daily_costs.csv --days 5 --top 1 --for
 
 ## Limitations
 
-- No adapters for AWS CUR, Google Cloud billing export or Azure cost exports, and no `s3://` paths. You must flatten your export to the CSV above first.
+- Only AWS CUR (CSV) has an adapter. For Google Cloud billing export or Azure cost exports, flatten to the generic CSV above first. No `s3://` paths.
 - No weekly seasonality model. A service that is much more expensive on one weekday than the others can be flagged on that day; widen `--baseline-days`, raise `--threshold`, or use `--min-change` to quieten it.
 - A sustained step change is reported for roughly the first half of the baseline window, until the median catches up. There is no separate "level shift" classification.
 - One `tag` value per row. Multiple tag keys need to be combined into one string (for example `team=data;env=prod`) before export.
