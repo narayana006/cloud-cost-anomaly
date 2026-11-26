@@ -2,7 +2,7 @@
 
 Detect unusual daily cloud spend from a cost CSV and explain which service, account or tag caused it.
 
-**Status:** early but working. Today it reads a daily cost CSV, flags anomalous days per service and account (or any combination of service, account and tag) against a robust trailing baseline, and names the rows that drove each one, as Markdown or JSON. It also reads AWS Cost and Usage Report (CUR) CSV files directly. It does not yet read Google Cloud or Azure billing exports, and it does not send alerts. See the [checklist](#features).
+**Status:** early but working. Today it reads a daily cost CSV, flags anomalous days per service and account (or any combination of service, account and tag) against a robust trailing baseline, and names the rows that drove each one, as Markdown or JSON. It also reads AWS Cost and Usage Report (CUR) CSV files and Google Cloud billing export CSV files directly. It does not yet read Azure cost exports, and it does not send alerts. See the [checklist](#features).
 
 It only reads a file you give it. It never talks to a cloud account.
 
@@ -123,6 +123,30 @@ Top contributors:
 
 Only CSV is read (plain or via `--export -`); Parquet CUR files, `s3://` paths and the CUR 2.0 JSON `resource_tags` column are not supported. Hourly line items are summed into days.
 
+## Google Cloud billing export input
+
+Use `--source gcp-billing` to scan a Google Cloud billing export saved as CSV (query the BigQuery export table and save the result as CSV). Dotted (`service.description`) and flattened (`service_description`) column names are both accepted.
+
+Columns used: `usage_start_time` (date part only), `service.description` (service), `project.id` (account) and `cost`. If a `credits` column is present (JSON array of `{"name", "amount"}`), the amounts are added to the cost, so the figures are net of committed use discounts and promotions; pass `--ignore-credits` to use gross cost instead. To explain anomalies by a resource label, pass its key with `--tag-key`, which reads the matching entry of the JSON `labels` column and shows it as `<key>=<value>`. Without `--tag-key`, every row is `(untagged)`.
+
+```bash
+cloud-cost-anomaly scan --source gcp-billing --tag-key team --export examples/gcp_billing_sample.csv
+```
+
+```markdown
+**1 anomaly found**, largest change first.
+
+| Date | Service | Account | Cost | Baseline | Change | Score |
+|---|---|---|---:|---:|---:|---:|
+| 2025-03-21 | Compute Engine | my-prod-project | 540.00 | 90.90 | +449.10 (+494%) | 98.8 |
+
+Top contributors:
+
+- `team=data`: 450.00 vs usual 0.00 (+450.00, 100% of the change)
+```
+
+Only CSV is read; the BigQuery API, Cloud Storage paths, and the Console "Cost table" CSV report (which has a different layout) are not supported. The sample is synthetic.
+
 ## How detection works
 
 1. Rows are summed into one daily series per group. The default group is service + account.
@@ -142,8 +166,9 @@ cloud-cost-anomaly scan --export FILE [options]
 | Option | Default | Meaning |
 |---|---|---|
 | `--export FILE` | required | Cost CSV, or `-` for stdin |
-| `--source {generic,aws-cur}` | generic | Input layout |
-| `--tag-key KEY` | none | With `aws-cur`: tag taken from `resourceTags/user:KEY` |
+| `--source {generic,aws-cur,gcp-billing}` | generic | Input layout |
+| `--tag-key KEY` | none | With `aws-cur`: tag from `resourceTags/user:KEY`. With `gcp-billing`: label `KEY` |
+| `--ignore-credits` | off | With `gcp-billing`: use gross cost, ignore credits |
 | `--days N` | 30 | Check the most recent N days in the file (counted back from the last date in the file, not from today) |
 | `--baseline-days N` | 14 | Trailing window each day is compared with |
 | `--min-history N` | 7 | Days of history needed before a day is judged |
@@ -238,7 +263,7 @@ cloud-cost-anomaly scan --export examples/daily_costs.csv --days 5 --top 1 --for
 
 ## Features
 
-- [ ] Reads AWS, Google Cloud and Azure billing exports (today: AWS CUR CSV and a generic daily cost CSV; Google Cloud and Azure still to do)
+- [ ] Reads AWS, Google Cloud and Azure billing exports (today: AWS CUR CSV, Google Cloud billing export CSV and a generic daily cost CSV; Azure still to do)
 - [x] Daily anomaly detection per service, account and tag
 - [x] Explains each anomaly by its largest contributing line items
 - [ ] Slack or webhook alerts
@@ -246,7 +271,7 @@ cloud-cost-anomaly scan --export examples/daily_costs.csv --days 5 --top 1 --for
 
 ## Limitations
 
-- Only AWS CUR (CSV) has an adapter. For Google Cloud billing export or Azure cost exports, flatten to the generic CSV above first. No `s3://` paths.
+- Only AWS CUR and Google Cloud billing export (both CSV) have adapters. For Azure cost exports, flatten to the generic CSV above first. No `s3://` paths.
 - No weekly seasonality model. A service that is much more expensive on one weekday than the others can be flagged on that day; widen `--baseline-days`, raise `--threshold`, or use `--min-change` to quieten it.
 - A sustained step change is reported for roughly the first half of the baseline window, until the median catches up. There is no separate "level shift" classification.
 - One `tag` value per row. Multiple tag keys need to be combined into one string (for example `team=data;env=prod`) before export.
@@ -263,7 +288,7 @@ python examples/generate_sample.py   # regenerates the sample CSV deterministica
 
 ## Contributing
 
-Issues and pull requests are welcome. The most useful contributions right now are billing-export adapters that turn a real AWS, Google Cloud or Azure export into the CSV schema above, and reports of false positives with a (scrubbed) series that reproduces them. Please include a test with any code change.
+Issues and pull requests are welcome. The most useful contributions right now are billing-export adapters (Azure is next) that turn a real export into the CSV schema above, and reports of false positives with a (scrubbed) series that reproduces them. Please include a test with any code change.
 
 Built and maintained by [Narayana Vemburaj](https://github.com/narayana006).
 

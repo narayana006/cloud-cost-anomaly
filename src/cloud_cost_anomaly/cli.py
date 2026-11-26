@@ -7,6 +7,7 @@ import sys
 
 from . import __version__
 from .aws_cur import read_aws_cur, read_aws_cur_file
+from .gcp_billing import read_gcp_billing, read_gcp_billing_file
 from .detect import GROUP_FIELDS, Settings, scan
 from .loader import CostFileError, read_costs, read_costs_file
 from .report import to_json, to_markdown
@@ -23,11 +24,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("scan", help="scan a daily cost CSV for anomalies")
     p.add_argument("--export", required=True, metavar="FILE",
                    help="daily cost CSV (date,service,account,tag,cost); '-' reads stdin")
-    p.add_argument("--source", choices=("generic", "aws-cur"), default="generic",
-                   help="input layout: the generic daily CSV or an AWS Cost and Usage "
-                        "Report CSV (default: generic)")
+    p.add_argument("--source", choices=("generic", "aws-cur", "gcp-billing"),
+                   default="generic",
+                   help="input layout: the generic daily CSV, an AWS Cost and Usage "
+                        "Report CSV, or a Google Cloud billing export CSV (default: generic)")
     p.add_argument("--tag-key", metavar="KEY",
-                   help="with --source aws-cur: use the resourceTags/user:KEY column as the tag")
+                   help="with --source aws-cur: use the resourceTags/user:KEY column as the tag; "
+                        "with gcp-billing: use the label KEY from the labels column")
+    p.add_argument("--ignore-credits", action="store_true",
+                   help="with --source gcp-billing: use gross cost and ignore the credits column")
     p.add_argument("--days", type=int, default=30,
                    help="check the most recent N days in the file (default: 30)")
     p.add_argument("--baseline-days", type=int, default=14,
@@ -67,9 +72,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         settings.validate()
-        if args.tag_key and args.source != "aws-cur":
-            raise ValueError("--tag-key only applies with --source aws-cur")
-        if args.source == "aws-cur":
+        if args.tag_key and args.source == "generic":
+            raise ValueError("--tag-key only applies with --source aws-cur or gcp-billing")
+        if args.ignore_credits and args.source != "gcp-billing":
+            raise ValueError("--ignore-credits only applies with --source gcp-billing")
+        if args.source == "gcp-billing":
+            credits = not args.ignore_credits
+            rows = (read_gcp_billing(sys.stdin, args.tag_key, credits) if args.export == "-"
+                    else read_gcp_billing_file(args.export, args.tag_key, credits))
+        elif args.source == "aws-cur":
             rows = (read_aws_cur(sys.stdin, args.tag_key) if args.export == "-"
                     else read_aws_cur_file(args.export, args.tag_key))
         else:
